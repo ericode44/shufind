@@ -201,10 +201,22 @@ function saveCache(){ localStorage.setItem("vac_airport_cache", JSON.stringify(c
 async function apiGet(path, params){
   const url = new URL(BASE + path);
   Object.entries(params).forEach(([k,v])=>{ if(v!==undefined && v!=='') url.searchParams.set(k,v); });
-  const res = await fetch(url.toString(), { headers:{ "X-RapidAPI-Key": getKey(), "X-RapidAPI-Host": HOST } });
-  if(!res.ok) throw new Error("HTTP " + res.status);
+  let res;
+  try{
+    res = await fetch(url.toString(), { headers:{ "X-RapidAPI-Key": getKey(), "X-RapidAPI-Host": HOST } });
+  }catch(networkErr){
+    const err = new Error("Impossibile raggiungere il server (rete o CORS bloccati).");
+    err.isNetwork = true; throw err;
+  }
+  if(!res.ok){
+    const err = new Error("Il server ha risposto con errore HTTP " + res.status);
+    err.isServer = true; throw err;
+  }
   const json = await res.json();
-  if(json.status === false) throw new Error(json.message || "Errore API");
+  if(json.status === false){
+    const err = new Error(json.message || "Errore restituito dall'API");
+    err.isServer = true; throw err;
+  }
   return json;
 }
 
@@ -227,7 +239,12 @@ document.getElementById('testBtn').addEventListener('click', async ()=>{
     await apiGet("searchAirport", { query: "London" });
     el.textContent = "Connessione riuscita — la chiave funziona."; el.style.color = "var(--mint)";
   }catch(e){
-    el.textContent = e.message + " — se è un errore di rete/CORS, apri questo file salvato sul tuo computer direttamente dal browser."; el.style.color = "#ff8f6b";
+    if(e.isNetwork){
+      el.textContent = e.message + " — apri questo file salvato sul tuo computer direttamente dal browser, non da qui.";
+    } else {
+      el.textContent = "Il server ha risposto con un errore: " + e.message + " — verifica di aver cliccato \"Subscribe to Test\" sul piano gratuito di Sky-Scrapper su RapidAPI, oppure riprova tra qualche minuto (può essere un problema temporaneo del loro servizio).";
+    }
+    el.style.color = "#ff8f6b";
   }
 });
 
