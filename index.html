@@ -155,12 +155,12 @@ const HOST = "sky-scrapper.p.rapidapi.com";
 const BASE = "https://" + HOST + "/api/v1/flights/";
 let selectedDest = null;
 let selectedRegion = "europa";
-const cache = JSON.parse(localStorage.getItem("vac_airport_cache") || "{}");
+const cache = JSON.parse(localStorage.getItem("vac_airport_cache_v2") || "{}");
 
 const REGIONS = {
-  italia: ["Milano","Roma","Napoli","Torino","Bologna","Venezia","Bari","Catania","Palermo","Cagliari","Firenze","Verona","Pisa","Genova","Trieste"],
-  europa: ["Milano","Roma","Napoli","Torino","Bologna","Londra","Parigi","Berlino","Monaco di Baviera","Madrid","Barcellona","Amsterdam","Lisbona","Vienna","Praga","Atene","Dublino","Bruxelles","Zurigo","Varsavia","Copenaghen","Stoccolma","Oslo","Helsinki","Budapest","Bucarest","Istanbul","Mosca","Ginevra","Manchester"],
-  mondo: ["Milano","Roma","Londra","Parigi","Berlino","Madrid","Istanbul","Mosca","New York","Los Angeles","Tokyo","Dubai","Singapore","Sydney","San Paolo","Toronto","Il Cairo","Bangkok","Seoul","Citta del Messico","Mumbai","Johannesburg","Buenos Aires","Hong Kong","Doha","Kuala Lumpur","Chicago","Miami","Vancouver","Shanghai","Delhi","Nairobi","Casablanca","Reykjavik","Lima","Bogota","Melbourne","Pechino","Osaka","Tel Aviv","Abu Dhabi","Auckland","Santiago","Montreal","Houston","Seattle","Francoforte","Amman","Nuova Delhi","Perth"]
+  italia: ["Milan", "Rome", "Naples", "Turin", "Bologna", "Venice", "Bari", "Catania", "Palermo", "Cagliari", "Florence", "Verona", "Pisa", "Genoa", "Trieste"],
+  europa: ["Milan", "Rome", "Naples", "Turin", "Bologna", "London", "Paris", "Berlin", "Munich", "Madrid", "Barcelona", "Amsterdam", "Lisbon", "Vienna", "Prague", "Athens", "Dublin", "Brussels", "Zurich", "Warsaw", "Copenhagen", "Stockholm", "Oslo", "Helsinki", "Budapest", "Bucharest", "Istanbul", "Moscow", "Geneva", "Manchester"],
+  mondo: ["Milan", "Rome", "London", "Paris", "Berlin", "Madrid", "Istanbul", "Moscow", "New York", "Los Angeles", "Tokyo", "Dubai", "Singapore", "Sydney", "Sao Paulo", "Toronto", "Cairo", "Bangkok", "Seoul", "Mexico City", "Mumbai", "Johannesburg", "Buenos Aires", "Hong Kong", "Doha", "Kuala Lumpur", "Chicago", "Miami", "Vancouver", "Shanghai", "Delhi", "Nairobi", "Casablanca", "Reykjavik", "Lima", "Bogota", "Melbourne", "Beijing", "Osaka", "Tel Aviv", "Abu Dhabi", "Auckland", "Santiago", "Montreal", "Houston", "Seattle", "Frankfurt", "Amman", "Perth", "Lagos"]
 };
 
 let selectedDateMode = "exact";
@@ -196,7 +196,7 @@ document.querySelectorAll('#regionChips .chip').forEach(chip=>{
 });
 
 function getKey(){ return document.getElementById('apiKey').value.trim(); }
-function saveCache(){ localStorage.setItem("vac_airport_cache", JSON.stringify(cache)); }
+function saveCache(){ localStorage.setItem("vac_airport_cache_v2", JSON.stringify(cache)); }
 
 async function apiGet(path, params){
   const url = new URL(BASE + path);
@@ -224,7 +224,8 @@ async function resolveCity(name){
   const key = name.trim().toLowerCase();
   if(cache[key]) return cache[key];
   const json = await apiGet("searchAirport", { query: name });
-  const first = json.data && json.data[0];
+  const list = json.data || [];
+  const first = list.find(x=>x.navigation && x.navigation.entityType==='CITY') || list[0];
   if(!first) throw new Error("Nessun risultato per " + name);
   const info = { skyId:first.navigation.relevantFlightParams.skyId, entityId:first.navigation.relevantFlightParams.entityId, title:first.presentation.title };
   cache[key] = info; saveCache();
@@ -286,15 +287,27 @@ function cheapestPrice(flightJson){
 function renderResults(rows){
   const body = document.getElementById('resultsBody');
   body.innerHTML = "";
-  rows.sort((a,b)=> (a.price ?? Infinity) - (b.price ?? Infinity));
-  rows.forEach((r,i)=>{
+  const ok = rows.filter(r=>r.price!=null).sort((a,b)=>a.price-b.price);
+  const failed = rows.filter(r=>r.price==null);
+  ok.forEach((r,i)=>{
     const div = document.createElement('div');
-    div.className = 'result-row' + (i===0 && r.price!=null ? ' top' : '');
-    div.innerHTML = `<span class="rank">${i+1}</span><span class="city">${r.city}${i===0 && r.price!=null ? '<span class="badge">più economica</span>' : ''}</span>` +
-      (r.price!=null ? `<span class="price">${r.price.toFixed(0)} ${r.currency}</span>` : `<span class="err">${r.error||'n/d'}</span>`);
+    div.className = 'result-row' + (i===0 ? ' top' : '');
+    div.innerHTML = `<span class="rank">${i+1}</span><span class="city">${r.city}${i===0 ? '<span class="badge">più economica</span>' : ''}</span><span class="price">${r.price.toFixed(0)} ${r.currency}</span>`;
     body.appendChild(div);
   });
+  if(failed.length){
+    const d = document.createElement('details');
+    d.style.marginTop = '12px';
+    d.innerHTML = `<summary>${failed.length} città senza risultato</summary>` + failed.map(f=>`<div class="err" style="padding:3px 0;">${f.city} — ${f.error||'nessun volo trovato'}</div>`).join('');
+    body.appendChild(d);
+  }
   document.getElementById('resultsPanel').style.display = rows.length ? 'block' : 'none';
+}
+
+const sleep = ms => new Promise(r=>setTimeout(r, ms));
+async function retry429(fn){
+  try{ return await fn(); }
+  catch(e){ if(String(e.message).includes('429')){ await sleep(6000); return await fn(); } throw e; }
 }
 
 document.getElementById('searchBtn').addEventListener('click', async ()=>{
@@ -315,26 +328,35 @@ document.getElementById('searchBtn').addEventListener('click', async ()=>{
   const market = document.getElementById('market').value.trim() || 'IT';
   const adults = document.getElementById('adults').value || '1';
   const cabin = document.getElementById('cabin').value;
-  const cities = REGIONS[selectedRegion];
+  const destName = selectedDest.title.toLowerCase();
+  const cities = REGIONS[selectedRegion].filter(c=>!destName.includes(c.toLowerCase()));
 
   document.getElementById('searchBtn').disabled = true;
   const rows = []; renderResults(rows);
+  let stopped = false;
 
   for(let i=0;i<cities.length;i++){
     const city = cities[i];
     status.textContent = `Controllo ${i+1}/${cities.length}: ${city}...`;
     try{
-      const origin = await resolveCity(city);
-      await new Promise(r=>setTimeout(r, 500));
+      const origin = await retry429(()=>resolveCity(city));
+      await sleep(700);
       const params = { originSkyId:origin.skyId, destinationSkyId:selectedDest.skyId, originEntityId:origin.entityId, destinationEntityId:selectedDest.entityId, date, adults, cabinClass:cabin, currency, market };
       if(wholeMonth) params.wholeMonth = wholeMonth;
-      const flightJson = await apiGet("searchFlights", params);
-      rows.push({ city: origin.title, price: cheapestPrice(flightJson), currency });
-    }catch(e){ rows.push({ city, price:null, error:e.message }); }
+      const flightJson = await retry429(()=>apiGet("searchFlights", params));
+      rows.push({ city: origin.title, price: cheapestPrice(flightJson), currency, error: 'nessun volo trovato' });
+    }catch(e){
+      if(String(e.message).includes('429')){ stopped = true; break; }
+      rows.push({ city, price:null, error:e.message });
+    }
     renderResults(rows);
-    await new Promise(r=>setTimeout(r, 600));
+    await sleep(900);
   }
-  status.textContent = `Fatto. ${rows.filter(r=>r.price!=null).length}/${cities.length} città con prezzo trovato.`;
+  renderResults(rows);
+  const found = rows.filter(r=>r.price!=null).length;
+  status.textContent = stopped
+    ? `Ricerca interrotta: RapidAPI ha bloccato le richieste (limite 429). Trovati ${found} prezzi. Controlla la quota sul tuo account RapidAPI o riprova tra qualche minuto.`
+    : `Fatto. ${found}/${cities.length} città con prezzo trovato.`;
   document.getElementById('searchBtn').disabled = false;
 });
 </script>
