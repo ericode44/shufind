@@ -70,6 +70,13 @@
   details{color:var(--dim);font-size:12.5px;}
   details summary{cursor:pointer;color:var(--ink);font-size:13px;margin-bottom:8px;}
   footer{color:var(--dim);font-size:11.5px;margin-top:20px;line-height:1.6;text-align:center;}
+  .meta{color:var(--dim);font-size:12px;margin-left:8px;}
+  .bar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px;font-size:12px;color:var(--dim);}
+  .live{color:var(--ink);font-size:12px;text-decoration:none;border:1px solid var(--glass-border);padding:5px 9px;border-radius:999px;margin-left:10px;white-space:nowrap;}
+  .live:hover{border-color:var(--accent);}
+  .chk{display:flex;gap:8px;align-items:center;margin:12px 0 0;font-size:12.5px;color:var(--dim);}
+  .chk input{width:auto;}
+  .result-row{flex-wrap:wrap;gap:4px;}
 </style>
 </head>
 <body>
@@ -87,20 +94,17 @@
 
   <div class="glass" id="settingsPanel">
     <details>
-      <summary>Impostazioni chiave API (modalità test)</summary>
+      <summary>Token Travelpayouts (gratuito)</summary>
       <div class="field">
-        <label>Chiave RapidAPI (Sky-Scrapper) — resta solo nel tuo browser</label>
-        <input type="password" id="apiKey" placeholder="Incolla qui la tua X-RapidAPI-Key">
+        <label>Token API Travelpayouts — resta solo nel tuo browser</label>
+        <input type="password" id="apiKey" placeholder="Incolla qui il tuo token">
       </div>
       <div class="row">
         <div><label>Valuta</label><input id="currency" value="EUR"></div>
         <div><label>Mercato</label><input id="market" value="IT"></div>
-        <div><label>Adulti</label><input id="adults" type="number" min="1" value="1"></div>
-        <div><label>Classe</label>
-          <select id="cabin"><option value="economy" selected>Economy</option><option value="premiumeconomy">Premium</option><option value="business">Business</option><option value="first">First</option></select>
-        </div>
-      </div>
+                      </div>
       <button class="btn-ghost" id="testBtn" type="button">Verifica connessione</button>
+      <div id="usage" style="margin-top:8px;font-size:12px;"></div>
       <div id="testStatus" style="margin-top:8px;font-size:12px;"></div>
     </details>
   </div>
@@ -118,9 +122,9 @@
     <div class="field">
       <label>Da dove confrontare</label>
       <div class="chips" id="regionChips">
-        <div class="chip" data-region="italia">Italia<small>15 città</small></div>
-        <div class="chip active" data-region="europa">Europa<small>30 città</small></div>
-        <div class="chip" data-region="mondo">Ovunque<small>50 città nel mondo</small></div>
+        <div class="chip" data-region="italia">Italia</div>
+        <div class="chip active" data-region="europa">Europa</div>
+        <div class="chip" data-region="mondo">Ovunque</div>
       </div>
     </div>
 
@@ -135,229 +139,194 @@
       <div id="monthWrap" style="display:none;"><label>Mese di partenza</label><select id="departMonth"></select></div>
     </div>
 
+    <label class="chk"><input type="checkbox" id="fresh"> Forza dati freschi (ignora la cache locale, usa 1 chiamata)</label>
     <button class="btn-primary" id="searchBtn" type="button" style="margin-top:6px;">Trova le partenze più economiche</button>
     <div id="status"></div>
   </div>
 
   <div class="glass" id="resultsPanel" style="display:none;">
+    <div class="bar"><span id="resMeta"></span><button class="btn-ghost" id="sortBtn" type="button">Prezzo ↑</button></div>
     <div id="resultsBody"></div>
   </div>
 
   <footer>
-    Modalità test: la chiave resta solo nel tuo browser, nessun dato viene inviato altrove.<br>
-    Per ogni città l'app cerca il giorno più economico dell'intero mese scelto, in un'unica chiamata di ricerca.<br>
-    Il piano gratuito di RapidAPI concede circa 100 chiamate al mese in totale: con "Ovunque" (50 città) una sola ricerca può quasi esaurirlo.
+    Prezzi dalla cache di Aviasales (ricerche recenti degli utenti): sono indicativi. Il pulsante "Verifica live" apre Google Flights con il prezzo in tempo reale, senza consumare chiamate API.<br>
+    Una sola richiesta confronta tutte le città di partenza; i risultati restano in cache nel browser per 6 ore.
   </footer>
 </div>
 
 <script>
-const HOST = "sky-scrapper.p.rapidapi.com";
-const BASE = "https://" + HOST + "/api/v1/flights/";
-let selectedDest = null;
-let selectedRegion = "europa";
-const cache = JSON.parse(localStorage.getItem("vac_airport_cache_v2") || "{}");
-
-const REGIONS = {
-  italia: ["Milan", "Rome", "Naples", "Turin", "Bologna", "Venice", "Bari", "Catania", "Palermo", "Cagliari", "Florence", "Verona", "Pisa", "Genoa", "Trieste"],
-  europa: ["Milan", "Rome", "Naples", "Turin", "Bologna", "London", "Paris", "Berlin", "Munich", "Madrid", "Barcelona", "Amsterdam", "Lisbon", "Vienna", "Prague", "Athens", "Dublin", "Brussels", "Zurich", "Warsaw", "Copenhagen", "Stockholm", "Oslo", "Helsinki", "Budapest", "Bucharest", "Istanbul", "Moscow", "Geneva", "Manchester"],
-  mondo: ["Milan", "Rome", "London", "Paris", "Berlin", "Madrid", "Istanbul", "Moscow", "New York", "Los Angeles", "Tokyo", "Dubai", "Singapore", "Sydney", "Sao Paulo", "Toronto", "Cairo", "Bangkok", "Seoul", "Mexico City", "Mumbai", "Johannesburg", "Buenos Aires", "Hong Kong", "Doha", "Kuala Lumpur", "Chicago", "Miami", "Vancouver", "Shanghai", "Delhi", "Nairobi", "Casablanca", "Reykjavik", "Lima", "Bogota", "Melbourne", "Beijing", "Osaka", "Tel Aviv", "Abu Dhabi", "Auckland", "Santiago", "Montreal", "Houston", "Seattle", "Frankfurt", "Amman", "Perth", "Lagos"]
-};
-
-let selectedDateMode = "exact";
+const TP = "https://api.travelpayouts.com/aviasales/v3/prices_for_dates";
+const AUTO = "https://autocomplete.travelpayouts.com/places2";
+const CITIES_URL = "https://api.travelpayouts.com/data/en/cities.json";
+const EUROPE = new Set(["AL","AD","AT","BY","BE","BA","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR","HU","IS","IE","IT","LV","LI","LT","LU","MT","MD","MC","ME","NL","MK","NO","PL","PT","RO","RU","SM","RS","SK","SI","ES","SE","CH","UA","GB","TR","XK"]);
 const MESI = ["Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno","Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"];
-(function populateMonths(){
-  const sel = document.getElementById('departMonth');
+const $ = id => document.getElementById(id);
+let selectedDest = null, selectedRegion = "europa", selectedDateMode = "exact", citiesMap = null;
+
+(function(){
   const now = new Date();
   for(let i=0;i<12;i++){
     const d = new Date(now.getFullYear(), now.getMonth()+i, 1);
-    const value = d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,'0');
-    const opt = document.createElement('option');
-    opt.value = value;
-    opt.textContent = MESI[d.getMonth()] + " " + d.getFullYear();
-    sel.appendChild(opt);
+    const o = document.createElement('option');
+    o.value = d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,'0');
+    o.textContent = MESI[d.getMonth()]+" "+d.getFullYear();
+    $('departMonth').appendChild(o);
   }
 })();
-document.querySelectorAll('#dateModeChips .chip').forEach(chip=>{
-  chip.addEventListener('click', ()=>{
-    document.querySelectorAll('#dateModeChips .chip').forEach(c=>c.classList.remove('active'));
-    chip.classList.add('active');
-    selectedDateMode = chip.dataset.mode;
-    document.getElementById('exactDateWrap').style.display = selectedDateMode === 'exact' ? 'block' : 'none';
-    document.getElementById('monthWrap').style.display = selectedDateMode === 'month' ? 'block' : 'none';
-  });
+
+function chipGroup(sel, cb){
+  document.querySelectorAll(sel+' .chip').forEach(chip=>chip.addEventListener('click',()=>{
+    document.querySelectorAll(sel+' .chip').forEach(c=>c.classList.remove('active'));
+    chip.classList.add('active'); cb(chip);
+  }));
+}
+chipGroup('#regionChips', c=>{ selectedRegion = c.dataset.region; });
+chipGroup('#dateModeChips', c=>{
+  selectedDateMode = c.dataset.mode;
+  $('exactDateWrap').style.display = selectedDateMode==='exact' ? 'block':'none';
+  $('monthWrap').style.display = selectedDateMode==='month' ? 'block':'none';
 });
 
-document.querySelectorAll('#regionChips .chip').forEach(chip=>{
-  chip.addEventListener('click', ()=>{
-    document.querySelectorAll('#regionChips .chip').forEach(c=>c.classList.remove('active'));
-    chip.classList.add('active');
-    selectedRegion = chip.dataset.region;
-  });
-});
+try{ $('apiKey').value = localStorage.getItem('sf_token') || ''; }catch(e){}
+$('apiKey').addEventListener('input', ()=>{ try{ localStorage.setItem('sf_token', $('apiKey').value.trim()); }catch(e){} });
+const getKey = () => $('apiKey').value.trim();
 
-function getKey(){ return document.getElementById('apiKey').value.trim(); }
-function saveCache(){ localStorage.setItem("vac_airport_cache_v2", JSON.stringify(cache)); }
-
-async function apiGet(path, params){
-  const url = new URL(BASE + path);
-  Object.entries(params).forEach(([k,v])=>{ if(v!==undefined && v!=='') url.searchParams.set(k,v); });
+async function getJson(url){
   let res;
+  if(url.startsWith(TP)) bump(); try{ res = await fetch(url); }
+  catch(e){ throw new Error("Impossibile raggiungere il server (rete o CORS bloccati)."); }
+  if(res.status===401 || res.status===403) throw new Error("Token non valido o non autorizzato (HTTP "+res.status+")");
+  if(res.status===429) throw new Error("Troppe richieste ravvicinate (HTTP 429), riprova tra poco");
+  if(!res.ok) throw new Error("Errore HTTP "+res.status);
+  return res.json();
+}
+
+const TTL = 6*3600e3, today = () => new Date().toISOString().slice(0,10);
+function cacheGet(k){ try{ const o = JSON.parse(localStorage.getItem('sf_c_'+k)); if(o && Date.now()-o.t < TTL) return o; }catch(e){} return null; }
+function cacheSet(k,rows){ try{ localStorage.setItem('sf_c_'+k, JSON.stringify({t:Date.now(), rows})); }catch(e){} }
+function usage(){ try{ const u = JSON.parse(localStorage.getItem('sf_u')); if(u && u.d===today()) return u; }catch(e){} return {d:today(), n:0}; }
+function bump(){ const u = usage(); u.n++; try{ localStorage.setItem('sf_u', JSON.stringify(u)); }catch(e){} showUsage(); }
+function showUsage(){ $('usage').textContent = "Chiamate API effettuate oggi da questo browser: "+usage().n; }
+showUsage();
+
+async function loadCities(){
+  if(citiesMap) return citiesMap;
+  try{ const c = JSON.parse(localStorage.getItem('sf_cities')); if(c && Date.now()-c.t < 30*864e5){ citiesMap = c.m; return citiesMap; } }catch(e){}
+  citiesMap = {};
   try{
-    res = await fetch(url.toString(), { headers:{ "X-RapidAPI-Key": getKey(), "X-RapidAPI-Host": HOST } });
-  }catch(networkErr){
-    const err = new Error("Impossibile raggiungere il server (rete o CORS bloccati).");
-    err.isNetwork = true; throw err;
-  }
-  if(!res.ok){
-    const err = new Error("Il server ha risposto con errore HTTP " + res.status);
-    err.isServer = true; throw err;
-  }
-  const json = await res.json();
-  if(json.status === false){
-    const err = new Error(json.message || "Errore restituito dall'API");
-    err.isServer = true; throw err;
-  }
-  return json;
+    const list = await getJson(CITIES_URL);
+    list.forEach(c=>{ citiesMap[c.code] = [(c.name_translations && c.name_translations.it) || c.name, c.country_code]; });
+    try{ localStorage.setItem('sf_cities', JSON.stringify({t:Date.now(), m:citiesMap})); }catch(e){}
+  }catch(e){}
+  return citiesMap;
 }
 
-async function resolveCity(name){
-  const key = name.trim().toLowerCase();
-  if(cache[key]) return cache[key];
-  const json = await apiGet("searchAirport", { query: name });
-  const list = json.data || [];
-  const first = list.find(x=>x.navigation && x.navigation.entityType==='CITY') || list[0];
-  if(!first) throw new Error("Nessun risultato per " + name);
-  const info = { skyId:first.navigation.relevantFlightParams.skyId, entityId:first.navigation.relevantFlightParams.entityId, title:first.presentation.title };
-  cache[key] = info; saveCache();
-  return info;
-}
-
-document.getElementById('testBtn').addEventListener('click', async ()=>{
-  const el = document.getElementById('testStatus');
-  if(!getKey()){ el.textContent = "Inserisci prima la chiave API."; el.style.color = "#ff8f6b"; return; }
+$('testBtn').addEventListener('click', async ()=>{
+  const el = $('testStatus');
+  if(!getKey()){ el.textContent = "Inserisci prima il token."; el.style.color = "#ff8f6b"; return; }
   el.textContent = "Verifica in corso..."; el.style.color = "var(--dim)";
   try{
-    await apiGet("searchAirport", { query: "London" });
-    el.textContent = "Connessione riuscita — la chiave funziona."; el.style.color = "var(--mint)";
-  }catch(e){
-    if(e.isNetwork){
-      el.textContent = e.message + " — apri questo file salvato sul tuo computer direttamente dal browser, non da qui.";
-    } else {
-      el.textContent = "Il server ha risposto con un errore: " + e.message + " — verifica di aver cliccato \"Subscribe to Test\" sul piano gratuito di Sky-Scrapper su RapidAPI, oppure riprova tra qualche minuto (può essere un problema temporaneo del loro servizio).";
-    }
-    el.style.color = "#ff8f6b";
-  }
+    const j = await getJson(TP+"?origin=MAD&destination=BCN&departure_at="+$('departMonth').options[0].value+"&limit=1&token="+encodeURIComponent(getKey()));
+    if(j.success===false) throw new Error(j.error || "Token rifiutato");
+    el.textContent = "Connessione riuscita — il token funziona."; el.style.color = "var(--mint)";
+  }catch(e){ el.textContent = e.message; el.style.color = "#ff8f6b"; }
 });
 
-document.getElementById('destSearchBtn').addEventListener('click', async ()=>{
-  const q = document.getElementById('destQuery').value.trim();
-  const box = document.getElementById('destResults');
+$('destSearchBtn').addEventListener('click', async ()=>{
+  const q = $('destQuery').value.trim(), box = $('destResults');
   box.innerHTML = ""; selectedDest = null;
-  if(!q || !getKey()) return;
+  if(!q) return;
   box.innerHTML = '<div style="font-size:12px;color:var(--dim);">Cerco...</div>';
   try{
-    const json = await apiGet("searchAirport", { query: q });
+    const list = await getJson(AUTO+"?term="+encodeURIComponent(q)+"&locale=it&types[]=city&types[]=airport");
     box.innerHTML = "";
-    (json.data || []).slice(0,6).forEach(item=>{
+    list.sort((a,b)=>(a.type==='city'?0:1)-(b.type==='city'?0:1)).slice(0,6).forEach(it=>{
       const btn = document.createElement('button');
       btn.type = "button"; btn.className = "dest-opt";
-      btn.textContent = item.presentation.suggestionTitle || item.presentation.title;
+      btn.textContent = it.name+(it.country_name ? ", "+it.country_name : "")+" ("+it.code+(it.type==='airport' ? " · aeroporto" : "")+")";
       btn.addEventListener('click', ()=>{
         document.querySelectorAll('.dest-opt').forEach(b=>b.classList.remove('selected'));
         btn.classList.add('selected');
-        selectedDest = { skyId:item.navigation.relevantFlightParams.skyId, entityId:item.navigation.relevantFlightParams.entityId, title:item.presentation.title };
+        selectedDest = { code:it.code, title:it.name };
       });
       box.appendChild(btn);
     });
-    if(!json.data || !json.data.length) box.innerHTML = '<div class="err">Nessun risultato.</div>';
-  }catch(e){ box.innerHTML = '<div class="err">Errore: ' + e.message + '</div>'; }
+    if(!list.length) box.innerHTML = '<div class="err">Nessun risultato.</div>';
+  }catch(e){ box.innerHTML = '<div class="err">Errore: '+e.message+'</div>'; }
 });
 
-function cheapestPrice(flightJson){
-  const its = flightJson.data && flightJson.data.itineraries;
-  if(!its || !its.length) return null;
-  let min = null;
-  its.forEach(it=>{
-    let v = it.price && (typeof it.price.raw === 'number' ? it.price.raw : parseFloat(String(it.price.formatted||'').replace(/[^0-9.]/g,'')));
-    if(v!=null && !isNaN(v) && (min===null || v<min)) min = v;
-  });
-  return min;
-}
+let lastRows = null, lastAt = 0, lastCur = 'eur', lastDest = null, asc = true;
 
-function renderResults(rows){
-  const body = document.getElementById('resultsBody');
-  body.innerHTML = "";
-  const ok = rows.filter(r=>r.price!=null).sort((a,b)=>a.price-b.price);
-  const failed = rows.filter(r=>r.price==null);
-  ok.forEach((r,i)=>{
+function draw(){
+  const cm = citiesMap || {}, has = Object.keys(cm).length > 0;
+  let rows = lastRows.map(r=>{ const i = cm[r.o] || []; return Object.assign({}, r, {city:i[0] || r.o, country:i[1]}); });
+  if(has && selectedRegion==='italia') rows = rows.filter(r=>r.country==='IT');
+  if(has && selectedRegion==='europa') rows = rows.filter(r=>EUROPE.has(r.country));
+  const min = Math.min(...rows.map(r=>r.price));
+  rows.sort((a,b)=> asc ? a.price-b.price : b.price-a.price);
+  const body = $('resultsBody'); body.innerHTML = "";
+  rows.forEach((r,i)=>{
     const div = document.createElement('div');
-    div.className = 'result-row' + (i===0 ? ' top' : '');
-    div.innerHTML = `<span class="rank">${i+1}</span><span class="city">${r.city}${i===0 ? '<span class="badge">più economica</span>' : ''}</span><span class="price">${r.price.toFixed(0)} ${r.currency}</span>`;
+    div.className = 'result-row'+(r.price===min ? ' top' : '');
+    const d = (r.date||"").slice(0,10), day = d ? d.slice(8,10)+"/"+d.slice(5,7) : "";
+    const stops = r.transfers===0 ? "diretto" : (r.transfers==null ? "" : r.transfers+(r.transfers===1?" scalo":" scali"));
+    const gf = "https://www.google.com/travel/flights?q="+encodeURIComponent("Flights from "+r.o+" to "+lastDest.code+(d ? " on "+d : "")+" one way");
+    div.innerHTML = '<span class="rank">'+(i+1)+'</span><span class="city">'+r.city+(r.price===min ? '<span class="badge">più economica</span>' : '')+'<span class="meta">'+[day,stops,r.airline].filter(Boolean).join(' · ')+'</span></span><span class="price">'+Math.round(r.price)+' '+lastCur.toUpperCase()+'</span><a class="live" href="'+gf+'" target="_blank" rel="noopener">Verifica live ↗</a>';
     body.appendChild(div);
   });
-  if(failed.length){
-    const d = document.createElement('details');
-    d.style.marginTop = '12px';
-    d.innerHTML = `<summary>${failed.length} città senza risultato</summary>` + failed.map(f=>`<div class="err" style="padding:3px 0;">${f.city} — ${f.error||'nessun volo trovato'}</div>`).join('');
-    body.appendChild(d);
-  }
-  document.getElementById('resultsPanel').style.display = rows.length ? 'block' : 'none';
+  const mins = Math.round((Date.now()-lastAt)/60000);
+  $('resMeta').textContent = rows.length+" città · "+(mins<1 ? "appena scaricati" : "cache locale di "+mins+" min fa");
+  $('sortBtn').textContent = asc ? "Prezzo ↑ (dal più basso)" : "Prezzo ↓ (dal più alto)";
+  $('resultsPanel').style.display = rows.length ? 'block' : 'none';
+  return rows.length;
 }
+$('sortBtn').addEventListener('click', ()=>{ asc = !asc; if(lastRows) draw(); });
+document.querySelectorAll('#regionChips .chip').forEach(c=>c.addEventListener('click', ()=>{ if(lastRows) draw(); }));
 
-const sleep = ms => new Promise(r=>setTimeout(r, ms));
-async function retry429(fn){
-  try{ return await fn(); }
-  catch(e){ if(String(e.message).includes('429')){ await sleep(6000); return await fn(); } throw e; }
-}
-
-document.getElementById('searchBtn').addEventListener('click', async ()=>{
-  const status = document.getElementById('status');
-  if(!getKey()){ status.textContent = "Inserisci la tua chiave RapidAPI nelle impostazioni sopra."; return; }
+$('searchBtn').addEventListener('click', async ()=>{
+  const status = $('status');
+  if(!getKey()){ status.textContent = "Inserisci il tuo token Travelpayouts nelle impostazioni sopra."; return; }
   if(!selectedDest){ status.textContent = "Cerca e seleziona una destinazione prima di procedere."; return; }
-  let date, wholeMonth;
-  if(selectedDateMode === 'exact'){
-    date = document.getElementById('departDate').value;
-    if(!date){ status.textContent = "Seleziona una data di partenza."; return; }
-  } else {
-    const month = document.getElementById('departMonth').value;
-    if(!month){ status.textContent = "Seleziona un mese di partenza."; return; }
-    date = month + "-01";
-    wholeMonth = month;
-  }
-  const currency = document.getElementById('currency').value.trim() || 'EUR';
-  const market = document.getElementById('market').value.trim() || 'IT';
-  const adults = document.getElementById('adults').value || '1';
-  const cabin = document.getElementById('cabin').value;
-  const destName = selectedDest.title.toLowerCase();
-  const cities = REGIONS[selectedRegion].filter(c=>!destName.includes(c.toLowerCase()));
+  const dep = selectedDateMode==='exact' ? $('departDate').value : $('departMonth').value;
+  if(!dep){ status.textContent = "Seleziona una data di partenza."; return; }
+  const currency = ($('currency').value.trim() || 'EUR').toLowerCase();
+  const market = $('market').value.trim().toLowerCase();
+  const key = [selectedDest.code, dep, market, currency].join('|');
 
-  document.getElementById('searchBtn').disabled = true;
-  const rows = []; renderResults(rows);
-  let stopped = false;
-
-  for(let i=0;i<cities.length;i++){
-    const city = cities[i];
-    status.textContent = `Controllo ${i+1}/${cities.length}: ${city}...`;
-    try{
-      const origin = await retry429(()=>resolveCity(city));
-      await sleep(700);
-      const params = { originSkyId:origin.skyId, destinationSkyId:selectedDest.skyId, originEntityId:origin.entityId, destinationEntityId:selectedDest.entityId, date, adults, cabinClass:cabin, currency, market };
-      if(wholeMonth) params.wholeMonth = wholeMonth;
-      const flightJson = await retry429(()=>apiGet("searchFlights", params));
-      rows.push({ city: origin.title, price: cheapestPrice(flightJson), currency, error: 'nessun volo trovato' });
-    }catch(e){
-      if(String(e.message).includes('429')){ stopped = true; break; }
-      rows.push({ city, price:null, error:e.message });
+  $('searchBtn').disabled = true;
+  try{
+    await loadCities();
+    lastDest = selectedDest; lastCur = currency;
+    const hit = $('fresh').checked ? null : cacheGet(key);
+    if(hit){ lastRows = hit.rows; lastAt = hit.t; }
+    else{
+      status.textContent = "Cerco le partenze più economiche...";
+      let data = [];
+      for(const mk of [market, ""]){
+        const p = new URLSearchParams({ destination:selectedDest.code, departure_at:dep, one_way:"true", sorting:"price", limit:"1000", currency, token:getKey() });
+        if(mk) p.set('market', mk);
+        const j = await getJson(TP+"?"+p.toString());
+        if(j.success===false) throw new Error(j.error || "Errore API");
+        data = j.data || [];
+        if(data.length) break;
+      }
+      const best = {};
+      data.forEach(r=>{
+        if(!r.origin || r.origin===selectedDest.code || r.price==null) return;
+        if(!best[r.origin] || r.price < best[r.origin].price) best[r.origin] = r;
+      });
+      lastRows = Object.keys(best).map(o=>({ o, price:best[o].price, date:best[o].departure_at, transfers:best[o].transfers, airline:best[o].airline }));
+      lastAt = Date.now();
+      if(lastRows.length) cacheSet(key, lastRows);
     }
-    renderResults(rows);
-    await sleep(900);
-  }
-  renderResults(rows);
-  const found = rows.filter(r=>r.price!=null).length;
-  status.textContent = stopped
-    ? `Ricerca interrotta: RapidAPI ha bloccato le richieste (limite 429). Trovati ${found} prezzi. Controlla la quota sul tuo account RapidAPI o riprova tra qualche minuto.`
-    : `Fatto. ${found}/${cities.length} città con prezzo trovato.`;
-  document.getElementById('searchBtn').disabled = false;
+    const n = lastRows.length ? draw() : 0;
+    status.textContent = n
+      ? "Trovate "+n+" città di partenza"+(hit ? " (da cache locale, 0 chiamate usate)." : ".")+" Prezzi indicativi: usa \"Verifica live\" prima di prenotare."
+      : "Nessun prezzo in cache per questa destinazione e questo periodo (o per la zona scelta). Prova con \"Mese intero\", \"Ovunque\" o un'altra destinazione.";
+    if(!lastRows.length) $('resultsPanel').style.display = 'none';
+  }catch(e){ status.textContent = e.message; }
+  $('searchBtn').disabled = false;
 });
 </script>
 </body>
