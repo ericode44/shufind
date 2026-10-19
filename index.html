@@ -94,10 +94,10 @@
 
   <div class="glass" id="settingsPanel">
     <details>
-      <summary>Token Travelpayouts (gratuito)</summary>
+      <summary>Collegamento al proxy (Cloudflare Worker)</summary>
       <div class="field">
-        <label>Token API Travelpayouts — resta solo nel tuo browser</label>
-        <input type="password" id="apiKey" placeholder="Incolla qui il tuo token">
+        <label>URL del tuo Worker — il token Travelpayouts resta sul server</label>
+        <input type="url" id="apiKey" placeholder="https://shufind.tuonome.workers.dev">
       </div>
       <div class="row">
         <div><label>Valuta</label><input id="currency" value="EUR"></div>
@@ -156,9 +156,9 @@
 </div>
 
 <script>
-const TP = "https://api.travelpayouts.com/aviasales/v3/prices_for_dates";
-const AUTO = "https://autocomplete.travelpayouts.com/places2";
-const CITIES_URL = "https://api.travelpayouts.com/data/en/cities.json";
+const TP = "/prices";
+const AUTO = "/auto";
+const CITIES_URL = "/cities";
 const EUROPE = new Set(["AL","AD","AT","BY","BE","BA","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR","HU","IS","IE","IT","LV","LI","LT","LU","MT","MD","MC","ME","NL","MK","NO","PL","PT","RO","RU","SM","RS","SK","SI","ES","SE","CH","UA","GB","TR","XK"]);
 const MESI = ["Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno","Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"];
 const $ = id => document.getElementById(id);
@@ -194,7 +194,7 @@ const getKey = () => $('apiKey').value.trim();
 
 async function getJson(url){
   let res;
-  if(url.startsWith(TP)) bump(); try{ res = await fetch(url); }
+  if(url.startsWith(TP)) bump(); try{ res = await fetch(getKey().replace(/\/+$/,"")+url); }
   catch(e){ throw new Error("Impossibile raggiungere il server (rete o CORS bloccati)."); }
   if(res.status===401 || res.status===403) throw new Error("Token non valido o non autorizzato (HTTP "+res.status+")");
   if(res.status===429) throw new Error("Troppe richieste ravvicinate (HTTP 429), riprova tra poco");
@@ -224,12 +224,12 @@ async function loadCities(){
 
 $('testBtn').addEventListener('click', async ()=>{
   const el = $('testStatus');
-  if(!getKey()){ el.textContent = "Inserisci prima il token."; el.style.color = "#ff8f6b"; return; }
+  if(!getKey()){ el.textContent = "Inserisci prima l\'URL del Worker."; el.style.color = "#ff8f6b"; return; }
   el.textContent = "Verifica in corso..."; el.style.color = "var(--dim)";
   try{
-    const j = await getJson(TP+"?origin=MAD&destination=BCN&departure_at="+$('departMonth').options[0].value+"&limit=1&token="+encodeURIComponent(getKey()));
+    const j = await getJson(TP+"?origin=MAD&destination=BCN&departure_at="+$('departMonth').options[0].value+"&limit=1");
     if(j.success===false) throw new Error(j.error || "Token rifiutato");
-    el.textContent = "Connessione riuscita — il token funziona."; el.style.color = "var(--mint)";
+    el.textContent = "Connessione riuscita — proxy e token funzionano."; el.style.color = "var(--mint)";
   }catch(e){ el.textContent = e.message; el.style.color = "#ff8f6b"; }
 });
 
@@ -286,7 +286,7 @@ document.querySelectorAll('#regionChips .chip').forEach(c=>c.addEventListener('c
 
 $('searchBtn').addEventListener('click', async ()=>{
   const status = $('status');
-  if(!getKey()){ status.textContent = "Inserisci il tuo token Travelpayouts nelle impostazioni sopra."; return; }
+  if(!getKey()){ status.textContent = "Inserisci l\'URL del Worker nelle impostazioni sopra."; return; }
   if(!selectedDest){ status.textContent = "Cerca e seleziona una destinazione prima di procedere."; return; }
   const dep = selectedDateMode==='exact' ? $('departDate').value : $('departMonth').value;
   if(!dep){ status.textContent = "Seleziona una data di partenza."; return; }
@@ -304,7 +304,7 @@ $('searchBtn').addEventListener('click', async ()=>{
       status.textContent = "Cerco le partenze più economiche...";
       let data = [];
       for(const mk of [market, ""]){
-        const p = new URLSearchParams({ destination:selectedDest.code, departure_at:dep, one_way:"true", sorting:"price", limit:"1000", currency, token:getKey() });
+        const p = new URLSearchParams({ destination:selectedDest.code, departure_at:dep, one_way:"true", sorting:"price", limit:"1000", currency });
         if(mk) p.set('market', mk);
         const j = await getJson(TP+"?"+p.toString());
         if(j.success===false) throw new Error(j.error || "Errore API");
