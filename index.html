@@ -71,12 +71,33 @@
   details summary{cursor:pointer;color:var(--ink);font-size:13px;margin-bottom:8px;}
   footer{color:var(--dim);font-size:11.5px;margin-top:20px;line-height:1.6;text-align:center;}
   .meta{color:var(--dim);font-size:12px;margin-left:8px;}
+  .sub2{display:block;color:var(--dim);font-size:12.5px;margin-top:2px;}
   .bar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px;font-size:12px;color:var(--dim);}
   .live{color:var(--ink);font-size:12px;text-decoration:none;border:1px solid var(--glass-border);padding:5px 9px;border-radius:999px;margin-left:10px;white-space:nowrap;}
   .live:hover{border-color:var(--accent);}
   .chk{display:flex;gap:8px;align-items:center;margin:12px 0 0;font-size:12.5px;color:var(--dim);}
   .chk input{width:auto;}
   .result-row{flex-wrap:wrap;gap:4px;}
+
+  /* layout: mobile = risultati sotto; schermi larghi = risultati a fianco */
+  .fit{width:fit-content;max-width:100%;}
+  #exactDateWrap,#monthWrap{flex:1 1 100%;min-width:0;}
+  @media (min-width:900px){
+    .wrap{max-width:1120px;}
+    .layout{display:grid;grid-template-columns:440px 1fr;gap:18px;align-items:start;}
+    .layout .glass{margin-bottom:0;}
+    .layout>.glass:first-child{position:sticky;top:18px;}
+  }
+  /* tipografia e controlli uniformi */
+  body,input,select,button,.chip,.dest-opt,.price,.city{font-family:'Inter',sans-serif;font-size:14px;}
+  label,.bar,.sub2,.badge,#status,.err{font-size:13px;}
+  .price{font-weight:600;font-size:15px;}
+  .city{font-size:15px;}
+  input,select,.chip,.btn-primary,.btn-ghost,.dest-opt{min-height:42px;border-radius:12px;}
+  input,select{padding:0 14px;}
+  .chip{display:inline-flex;align-items:center;padding:0 16px;}
+  .btn-primary,.btn-ghost{padding:0 16px;font-weight:600;}
+  .dest-opt{padding:0 14px;}
 </style>
 </head>
 <body>
@@ -92,23 +113,9 @@
     </svg>
   </header>
 
-  <div class="glass" id="settingsPanel">
-    <details>
-      <summary>Collegamento al proxy (Cloudflare Worker)</summary>
-      <div class="field">
-        <label>URL del tuo Worker — il token Travelpayouts resta sul server</label>
-        <input type="url" id="apiKey" placeholder="https://shufind.tuonome.workers.dev">
-      </div>
-      <div class="row">
-        <div><label>Valuta</label><input id="currency" value="EUR"></div>
-        <div><label>Mercato</label><input id="market" value="IT"></div>
-                      </div>
-      <button class="btn-ghost" id="testBtn" type="button">Verifica connessione</button>
-      <div id="usage" style="margin-top:8px;font-size:12px;"></div>
-      <div id="testStatus" style="margin-top:8px;font-size:12px;"></div>
-    </details>
-  </div>
+  <input type="hidden" id="currency" value="EUR"><input type="hidden" id="market" value="IT">
 
+  <div class="layout">
   <div class="glass">
     <div class="field">
       <label>Destinazione</label>
@@ -119,6 +126,7 @@
       <div id="destResults" class="dest-results"></div>
     </div>
 
+    <div class="fit">
     <div class="field">
       <label>Da dove confrontare</label>
       <div class="chips" id="regionChips">
@@ -138,6 +146,7 @@
       <div id="exactDateWrap"><label>Data di partenza</label><input type="date" id="departDate"></div>
       <div id="monthWrap" style="display:none;"><label>Mese di partenza</label><select id="departMonth"></select></div>
     </div>
+    </div>
 
     <label class="chk"><input type="checkbox" id="fresh"> Forza dati freschi (ignora la cache locale, usa 1 chiamata)</label>
     <button class="btn-primary" id="searchBtn" type="button" style="margin-top:6px;">Trova le partenze più economiche</button>
@@ -149,9 +158,11 @@
     <div id="resultsBody"></div>
   </div>
 
+  </div>
+
   <footer>
-    Prezzi dalla cache di Aviasales (ricerche recenti degli utenti): sono indicativi. Il pulsante "Verifica live" apre Google Flights con il prezzo in tempo reale, senza consumare chiamate API.<br>
-    Una sola richiesta confronta tutte le città di partenza; i risultati restano in cache nel browser per 6 ore.
+    Prezzi dalla cache di Aviasales (ricerche recenti degli utenti): sono indicativi. Verifica sempre il prezzo sul sito della compagnia o di un comparatore prima di prenotare.<br>
+    Una sola richiesta confronta tutte le città di partenza; i risultati restano in cache nel browser per 6 ore.<br><span id="usage"></span>
   </footer>
 </div>
 
@@ -160,6 +171,8 @@ const TP = "/prices";
 const AUTO = "/auto";
 const CITIES_URL = "/cities";
 const EUROPE = new Set(["AL","AD","AT","BY","BE","BA","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR","HU","IS","IE","IT","LV","LI","LT","LU","MT","MD","MC","ME","NL","MK","NO","PL","PT","RO","RU","SM","RS","SK","SI","ES","SE","CH","UA","GB","TR","XK"]);
+let regionNames = null; try{ regionNames = new Intl.DisplayNames(['it'], {type:'region'}); }catch(e){}
+const countryName = c => { try{ return (regionNames && c && regionNames.of(c)) || c || ''; }catch(e){ return c || ''; } };
 const MESI = ["Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno","Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"];
 const $ = id => document.getElementById(id);
 let selectedDest = null, selectedRegion = "europa", selectedDateMode = "exact", citiesMap = null;
@@ -188,9 +201,7 @@ chipGroup('#dateModeChips', c=>{
   $('monthWrap').style.display = selectedDateMode==='month' ? 'block':'none';
 });
 
-try{ $('apiKey').value = localStorage.getItem('sf_token') || ''; }catch(e){}
-$('apiKey').addEventListener('input', ()=>{ try{ localStorage.setItem('sf_token', $('apiKey').value.trim()); }catch(e){} });
-const getKey = () => $('apiKey').value.trim();
+const getKey = () => "https://calm-bread-85f7.ericode44.workers.dev";
 
 async function getJson(url){
   let res;
@@ -221,17 +232,6 @@ async function loadCities(){
   }catch(e){}
   return citiesMap;
 }
-
-$('testBtn').addEventListener('click', async ()=>{
-  const el = $('testStatus');
-  if(!getKey()){ el.textContent = "Inserisci prima l\'URL del Worker."; el.style.color = "#ff8f6b"; return; }
-  el.textContent = "Verifica in corso..."; el.style.color = "var(--dim)";
-  try{
-    const j = await getJson(TP+"?origin=MAD&destination=BCN&departure_at="+$('departMonth').options[0].value+"&limit=1");
-    if(j.success===false) throw new Error(j.error || "Token rifiutato");
-    el.textContent = "Connessione riuscita — proxy e token funzionano."; el.style.color = "var(--mint)";
-  }catch(e){ el.textContent = e.message; el.style.color = "#ff8f6b"; }
-});
 
 $('destSearchBtn').addEventListener('click', async ()=>{
   const q = $('destQuery').value.trim(), box = $('destResults');
@@ -271,8 +271,7 @@ function draw(){
     div.className = 'result-row'+(r.price===min ? ' top' : '');
     const d = (r.date||"").slice(0,10), day = d ? d.slice(8,10)+"/"+d.slice(5,7) : "";
     const stops = r.transfers===0 ? "diretto" : (r.transfers==null ? "" : r.transfers+(r.transfers===1?" scalo":" scali"));
-    const gf = "https://www.google.com/travel/flights?q="+encodeURIComponent("Flights from "+r.o+" to "+lastDest.code+(d ? " on "+d : "")+" one way");
-    div.innerHTML = '<span class="rank">'+(i+1)+'</span><span class="city">'+r.city+(r.price===min ? '<span class="badge">più economica</span>' : '')+'<span class="meta">'+[day,stops,r.airline].filter(Boolean).join(' · ')+'</span></span><span class="price">'+Math.round(r.price)+' '+lastCur.toUpperCase()+'</span><a class="live" href="'+gf+'" target="_blank" rel="noopener">Verifica live ↗</a>';
+    div.innerHTML = '<span class="rank">'+(i+1)+'</span><span class="city">'+r.city+(r.price===min ? '<span class="badge">più economica</span>' : '')+'<small class="sub2">'+[countryName(r.country),day,stops,r.airline].filter(Boolean).join(' · ')+'</small></span><span class="price">'+Math.round(r.price)+' '+lastCur.toUpperCase()+'</span>';
     body.appendChild(div);
   });
   const mins = Math.round((Date.now()-lastAt)/60000);
@@ -322,7 +321,7 @@ $('searchBtn').addEventListener('click', async ()=>{
     }
     const n = lastRows.length ? draw() : 0;
     status.textContent = n
-      ? "Trovate "+n+" città di partenza"+(hit ? " (da cache locale, 0 chiamate usate)." : ".")+" Prezzi indicativi: usa \"Verifica live\" prima di prenotare."
+      ? "Trovate "+n+" città di partenza"+(hit ? " (da cache locale, 0 chiamate usate)." : ".")+" Prezzi indicativi: verificali prima di prenotare."
       : "Nessun prezzo in cache per questa destinazione e questo periodo (o per la zona scelta). Prova con \"Mese intero\", \"Ovunque\" o un'altra destinazione.";
     if(!lastRows.length) $('resultsPanel').style.display = 'none';
   }catch(e){ status.textContent = e.message; }
