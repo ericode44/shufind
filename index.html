@@ -98,6 +98,10 @@
   .chip{display:inline-flex;align-items:center;padding:0 16px;}
   .btn-primary,.btn-ghost{padding:0 16px;font-weight:600;}
   .dest-opt{padding:0 14px;}
+  .btn-primary{width:auto;font-family:'Inter',sans-serif;font-size:14px;padding:0 22px;}
+  .btn-ghost{font-family:'Inter',sans-serif;font-size:14px;}
+  #dayChips .chip{min-height:34px;padding:0 12px;font-size:13px;}
+  #dayChips{max-height:112px;overflow-y:auto;}
 </style>
 </head>
 <body>
@@ -119,9 +123,9 @@
   <div class="glass">
     <div class="field">
       <label>Destinazione</label>
-      <div class="row" style="align-items:flex-end;">
-        <div style="flex:3;"><input id="destQuery" placeholder="Es. Barcellona, Tokyo, New York..."></div>
-        <div style="flex:1;min-width:100px;"><button class="btn-primary" id="destSearchBtn" type="button">Cerca</button></div>
+      <div class="row" style="align-items:flex-end;flex-wrap:nowrap;">
+        <div style="flex:1 1 auto;min-width:0;"><input id="destQuery" placeholder="Es. Barcellona, Tokyo, New York..."></div>
+        <div style="flex:0 0 auto;min-width:0;"><button class="btn-primary" id="destSearchBtn" type="button">Cerca</button></div>
       </div>
       <div id="destResults" class="dest-results"></div>
     </div>
@@ -148,20 +152,20 @@
     </div>
     </div>
 
-    <label class="chk"><input type="checkbox" id="fresh"> Forza dati freschi (ignora la cache locale, usa 1 chiamata)</label>
-    <button class="btn-primary" id="searchBtn" type="button" style="margin-top:6px;">Trova le partenze più economiche</button>
+    <button class="btn-primary" id="searchBtn" type="button" style="margin-top:6px;">Trova partenze</button>
     <div id="status"></div>
   </div>
 
   <div class="glass" id="resultsPanel" style="display:none;">
     <div class="bar"><span id="resMeta"></span><button class="btn-ghost" id="sortBtn" type="button">Prezzo ↑</button></div>
+    <div class="field"><label>Date di partenza con prezzi trovati</label><div class="chips" id="dayChips"></div></div>
     <div id="resultsBody"></div>
   </div>
 
   </div>
 
   <footer>
-    Prezzi dalla cache di Aviasales (ricerche recenti degli utenti): sono indicativi. Verifica sempre il prezzo sul sito della compagnia o di un comparatore prima di prenotare.<br>
+    Prezzi dalla cache di Aviasales (ricerche recenti degli utenti): sono indicativi. Il pulsante "Verifica live" apre Google Flights già compilato: controlla lì il prezzo reale prima di prenotare.<br>
     Una sola richiesta confronta tutte le città di partenza; i risultati restano in cache nel browser per 6 ore.<br><span id="usage"></span>
   </footer>
 </div>
@@ -175,11 +179,12 @@ let regionNames = null; try{ regionNames = new Intl.DisplayNames(['it'], {type:'
 const countryName = c => { try{ return (regionNames && c && regionNames.of(c)) || c || ''; }catch(e){ return c || ''; } };
 const MESI = ["Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno","Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"];
 const $ = id => document.getElementById(id);
-let selectedDest = null, selectedRegion = "europa", selectedDateMode = "exact", citiesMap = null;
+let selectedLabel = '', selectedDest = null, selectedRegion = "europa", selectedDateMode = "exact", citiesMap = null;
 
 (function(){
   const now = new Date();
-  for(let i=0;i<12;i++){
+  const iso = d=>d.toISOString().slice(0,10); $('departDate').min = iso(now); $('departDate').max = iso(new Date(now.getTime()+120*864e5));
+  for(let i=0;i<4;i++){
     const d = new Date(now.getFullYear(), now.getMonth()+i, 1);
     const o = document.createElement('option');
     o.value = d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,'0');
@@ -233,6 +238,8 @@ async function loadCities(){
   return citiesMap;
 }
 
+$('destQuery').addEventListener('input', ()=>{ if($('destQuery').value !== selectedLabel) selectedDest = null; });
+$('destQuery').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); $('destSearchBtn').click(); } });
 $('destSearchBtn').addEventListener('click', async ()=>{
   const q = $('destQuery').value.trim(), box = $('destResults');
   box.innerHTML = ""; selectedDest = null;
@@ -246,9 +253,11 @@ $('destSearchBtn').addEventListener('click', async ()=>{
       btn.type = "button"; btn.className = "dest-opt";
       btn.textContent = it.name+(it.country_name ? ", "+it.country_name : "")+" ("+it.code+(it.type==='airport' ? " · aeroporto" : "")+")";
       btn.addEventListener('click', ()=>{
-        document.querySelectorAll('.dest-opt').forEach(b=>b.classList.remove('selected'));
-        btn.classList.add('selected');
         selectedDest = { code:it.code, title:it.name };
+        selectedLabel = btn.textContent;
+        $('destQuery').value = selectedLabel;
+        box.innerHTML = "";
+        $('status').textContent = "";
       });
       box.appendChild(btn);
     });
@@ -256,22 +265,38 @@ $('destSearchBtn').addEventListener('click', async ()=>{
   }catch(e){ box.innerHTML = '<div class="err">Errore: '+e.message+'</div>'; }
 });
 
-let lastRows = null, lastAt = 0, lastCur = 'eur', lastDest = null, asc = true;
+let selectedDay = null, lastShown = [], lastRows = null, lastAt = 0, lastCur = 'eur', lastDest = null, asc = true;
 
 function draw(){
   const cm = citiesMap || {}, has = Object.keys(cm).length > 0;
   let rows = lastRows.map(r=>{ const i = cm[r.o] || []; return Object.assign({}, r, {city:i[0] || r.o, country:i[1]}); });
   if(has && selectedRegion==='italia') rows = rows.filter(r=>r.country==='IT');
   if(has && selectedRegion==='europa') rows = rows.filter(r=>EUROPE.has(r.country));
+  const t0 = new Date().toISOString().slice(0,10);
+  rows = rows.filter(r=>(r.date||'').slice(0,10) >= t0);          // niente voli già partiti
+  const byDay = {}; rows.forEach(r=>{ const d=r.date.slice(0,10); (byDay[d]=byDay[d]||new Set()).add(r.o); });
+  const days = Object.keys(byDay).sort();
+  if(selectedDay && !byDay[selectedDay]) selectedDay = null;
+  const dc = $('dayChips'); dc.innerHTML = '';
+  [null].concat(days).forEach(d=>{
+    const c = document.createElement('div'); c.className = 'chip'+(d===selectedDay ? ' active' : '');
+    c.textContent = d ? d.slice(8,10)+'/'+d.slice(5,7)+' ('+byDay[d].size+')' : 'Tutte ('+days.length+')';
+    c.onclick = ()=>{ selectedDay = d; draw(); }; dc.appendChild(c);
+  });
+  if(selectedDay) rows = rows.filter(r=>r.date.slice(0,10)===selectedDay);
+  const bestO = {}; rows.forEach(r=>{ if(!bestO[r.o] || r.price < bestO[r.o].price) bestO[r.o] = r; });
+  rows = Object.values(bestO);
   const min = Math.min(...rows.map(r=>r.price));
   rows.sort((a,b)=> asc ? a.price-b.price : b.price-a.price);
+  lastShown = rows;
   const body = $('resultsBody'); body.innerHTML = "";
   rows.forEach((r,i)=>{
     const div = document.createElement('div');
     div.className = 'result-row'+(r.price===min ? ' top' : '');
     const d = (r.date||"").slice(0,10), day = d ? d.slice(8,10)+"/"+d.slice(5,7) : "";
     const stops = r.transfers===0 ? "diretto" : (r.transfers==null ? "" : r.transfers+(r.transfers===1?" scalo":" scali"));
-    div.innerHTML = '<span class="rank">'+(i+1)+'</span><span class="city">'+r.city+(r.price===min ? '<span class="badge">più economica</span>' : '')+'<small class="sub2">'+[countryName(r.country),day,stops,r.airline].filter(Boolean).join(' · ')+'</small></span><span class="price">'+Math.round(r.price)+' '+lastCur.toUpperCase()+'</span>';
+    const gf = "https://www.google.com/travel/flights?hl=it&curr="+lastCur.toUpperCase()+"&q="+encodeURIComponent("Flights from "+r.o+" to "+lastDest.code+(d ? " on "+d : "")+" one way");
+    div.innerHTML = '<span class="rank">'+(i+1)+'</span><span class="city">'+r.city+(r.price===min ? '<span class="badge">più economica</span>' : '')+'<small class="sub2">'+[countryName(r.country),day,stops,r.airline].filter(Boolean).join(' · ')+'</small></span><span class="price">'+Math.round(r.price)+' '+lastCur.toUpperCase()+'</span><a class="live" href="'+gf+'" target="_blank" rel="noopener">Verifica live ↗</a>';
     body.appendChild(div);
   });
   const mins = Math.round((Date.now()-lastAt)/60000);
@@ -297,7 +322,7 @@ $('searchBtn').addEventListener('click', async ()=>{
   try{
     await loadCities();
     lastDest = selectedDest; lastCur = currency;
-    const hit = $('fresh').checked ? null : cacheGet(key);
+    const hit = cacheGet(key);
     if(hit){ lastRows = hit.rows; lastAt = hit.t; }
     else{
       status.textContent = "Cerco le partenze più economiche...";
@@ -310,18 +335,20 @@ $('searchBtn').addEventListener('click', async ()=>{
         data = j.data || [];
         if(data.length) break;
       }
-      const best = {};
+      const seen = {};
       data.forEach(r=>{
-        if(!r.origin || r.origin===selectedDest.code || r.price==null) return;
-        if(!best[r.origin] || r.price < best[r.origin].price) best[r.origin] = r;
+        if(!r.origin || r.origin===selectedDest.code || r.price==null || !r.departure_at) return;
+        const k = r.origin+r.departure_at.slice(0,10);
+        if(!seen[k] || r.price < seen[k].price) seen[k] = r;
       });
-      lastRows = Object.keys(best).map(o=>({ o, price:best[o].price, date:best[o].departure_at, transfers:best[o].transfers, airline:best[o].airline }));
+      lastRows = Object.values(seen).map(r=>({ o:r.origin, price:r.price, date:r.departure_at, transfers:r.transfers, airline:r.airline }));
+      selectedDay = null;
       lastAt = Date.now();
       if(lastRows.length) cacheSet(key, lastRows);
     }
     const n = lastRows.length ? draw() : 0;
     status.textContent = n
-      ? "Trovate "+n+" città di partenza"+(hit ? " (da cache locale, 0 chiamate usate)." : ".")+" Prezzi indicativi: verificali prima di prenotare."
+      ? "Trovate "+n+" città di partenza"+(hit ? " (da cache locale, 0 chiamate usate)." : ".")+" Prezzi indicativi: usa \"Verifica live\" prima di prenotare."
       : "Nessun prezzo in cache per questa destinazione e questo periodo (o per la zona scelta). Prova con \"Mese intero\", \"Ovunque\" o un'altra destinazione.";
     if(!lastRows.length) $('resultsPanel').style.display = 'none';
   }catch(e){ status.textContent = e.message; }
