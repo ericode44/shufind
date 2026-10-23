@@ -100,8 +100,6 @@
   .dest-opt{padding:0 14px;}
   .btn-primary{width:auto;font-family:'Inter',sans-serif;font-size:14px;padding:0 22px;}
   .btn-ghost{font-family:'Inter',sans-serif;font-size:14px;}
-  #dayChips .chip{min-height:34px;padding:0 12px;font-size:13px;}
-  #dayChips{max-height:112px;overflow-y:auto;}
 </style>
 </head>
 <body>
@@ -150,15 +148,13 @@
       <div id="exactDateWrap"><label>Data di partenza</label><input type="date" id="departDate"></div>
       <div id="monthWrap" style="display:none;"><label>Mese di partenza</label><select id="departMonth"></select></div>
     </div>
+    <button class="btn-primary" id="searchBtn" type="button" style="margin-top:14px;width:100%;">Trova partenze</button>
     </div>
-
-    <button class="btn-primary" id="searchBtn" type="button" style="margin-top:6px;">Trova partenze</button>
     <div id="status"></div>
   </div>
 
   <div class="glass" id="resultsPanel" style="display:none;">
     <div class="bar"><span id="resMeta"></span><button class="btn-ghost" id="sortBtn" type="button">Prezzo ↑</button></div>
-    <div class="field"><label>Date di partenza con prezzi trovati</label><div class="chips" id="dayChips"></div></div>
     <div id="resultsBody"></div>
   </div>
 
@@ -171,7 +167,7 @@
 </div>
 
 <script>
-const TP = "/prices";
+const TP = "/prices", LATEST = "/latest";
 const AUTO = "/auto";
 const CITIES_URL = "/cities";
 const EUROPE = new Set(["AL","AD","AT","BY","BE","BA","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR","HU","IS","IE","IT","LV","LI","LT","LU","MT","MD","MC","ME","NL","MK","NO","PL","PT","RO","RU","SM","RS","SK","SI","ES","SE","CH","UA","GB","TR","XK"]);
@@ -183,8 +179,7 @@ let selectedLabel = '', selectedDest = null, selectedRegion = "europa", selected
 
 (function(){
   const now = new Date();
-  const iso = d=>d.toISOString().slice(0,10); $('departDate').min = iso(now); $('departDate').max = iso(new Date(now.getTime()+120*864e5));
-  for(let i=0;i<4;i++){
+  for(let i=0;i<12;i++){
     const d = new Date(now.getFullYear(), now.getMonth()+i, 1);
     const o = document.createElement('option');
     o.value = d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,'0');
@@ -218,7 +213,7 @@ async function getJson(url){
   return res.json();
 }
 
-const TTL = 6*3600e3, today = () => new Date().toISOString().slice(0,10);
+const TTL = 30*60e3, today = () => new Date().toISOString().slice(0,10);
 function cacheGet(k){ try{ const o = JSON.parse(localStorage.getItem('sf_c_'+k)); if(o && Date.now()-o.t < TTL) return o; }catch(e){} return null; }
 function cacheSet(k,rows){ try{ localStorage.setItem('sf_c_'+k, JSON.stringify({t:Date.now(), rows})); }catch(e){} }
 function usage(){ try{ const u = JSON.parse(localStorage.getItem('sf_u')); if(u && u.d===today()) return u; }catch(e){} return {d:today(), n:0}; }
@@ -226,6 +221,17 @@ function bump(){ const u = usage(); u.n++; try{ localStorage.setItem('sf_u', JSO
 function showUsage(){ $('usage').textContent = "Chiamate API effettuate oggi da questo browser: "+usage().n; }
 showUsage();
 
+async function tryLatest(dest, dep, cur, mk){
+  try{
+    const exact = selectedDateMode==='exact';
+    const p = new URLSearchParams({ destination:dest, period_type: exact ? 'day' : 'month', beginning_of_period: exact ? dep : dep+'-01', currency:cur });
+    if(mk) p.set('market', mk);
+    const j = await getJson(LATEST+"?"+p.toString());
+    const rows = (j.data||[]).filter(r=>r.origin && r.origin!==dest && r.value!=null && r.depart_date && r.actual!==false)
+      .map(r=>({ o:r.origin, price:r.value, date:r.depart_date, transfers:r.number_of_changes, airline:r.airline, foundAt:r.found_at }));
+    return rows.length ? rows : null;
+  }catch(e){ return null; }
+}
 async function loadCities(){
   if(citiesMap) return citiesMap;
   try{ const c = JSON.parse(localStorage.getItem('sf_cities')); if(c && Date.now()-c.t < 30*864e5){ citiesMap = c.m; return citiesMap; } }catch(e){}
@@ -274,16 +280,6 @@ function draw(){
   if(has && selectedRegion==='europa') rows = rows.filter(r=>EUROPE.has(r.country));
   const t0 = new Date().toISOString().slice(0,10);
   rows = rows.filter(r=>(r.date||'').slice(0,10) >= t0);          // niente voli già partiti
-  const byDay = {}; rows.forEach(r=>{ const d=r.date.slice(0,10); (byDay[d]=byDay[d]||new Set()).add(r.o); });
-  const days = Object.keys(byDay).sort();
-  if(selectedDay && !byDay[selectedDay]) selectedDay = null;
-  const dc = $('dayChips'); dc.innerHTML = '';
-  [null].concat(days).forEach(d=>{
-    const c = document.createElement('div'); c.className = 'chip'+(d===selectedDay ? ' active' : '');
-    c.textContent = d ? d.slice(8,10)+'/'+d.slice(5,7)+' ('+byDay[d].size+')' : 'Tutte ('+days.length+')';
-    c.onclick = ()=>{ selectedDay = d; draw(); }; dc.appendChild(c);
-  });
-  if(selectedDay) rows = rows.filter(r=>r.date.slice(0,10)===selectedDay);
   const bestO = {}; rows.forEach(r=>{ if(!bestO[r.o] || r.price < bestO[r.o].price) bestO[r.o] = r; });
   rows = Object.values(bestO);
   const min = Math.min(...rows.map(r=>r.price));
@@ -294,9 +290,11 @@ function draw(){
     const div = document.createElement('div');
     div.className = 'result-row'+(r.price===min ? ' top' : '');
     const d = (r.date||"").slice(0,10), day = d ? d.slice(8,10)+"/"+d.slice(5,7) : "";
+    const ageH = r.foundAt ? Math.max(0, Math.round((Date.now()-new Date(r.foundAt))/36e5)) : null;
+    const age = ageH==null || isNaN(ageH) ? "" : (ageH<1 ? "trovato ora" : ageH<48 ? "trovato "+ageH+" h fa" : "trovato "+Math.round(ageH/24)+" gg fa");
     const stops = r.transfers===0 ? "diretto" : (r.transfers==null ? "" : r.transfers+(r.transfers===1?" scalo":" scali"));
     const gf = "https://www.google.com/travel/flights?hl=it&curr="+lastCur.toUpperCase()+"&q="+encodeURIComponent("Flights from "+r.o+" to "+lastDest.code+(d ? " on "+d : "")+" one way");
-    div.innerHTML = '<span class="rank">'+(i+1)+'</span><span class="city">'+r.city+(r.price===min ? '<span class="badge">più economica</span>' : '')+'<small class="sub2">'+[countryName(r.country),day,stops,r.airline].filter(Boolean).join(' · ')+'</small></span><span class="price">'+Math.round(r.price)+' '+lastCur.toUpperCase()+'</span><a class="live" href="'+gf+'" target="_blank" rel="noopener">Verifica live ↗</a>';
+    div.innerHTML = '<span class="rank">'+(i+1)+'</span><span class="city">'+r.city+(r.price===min ? '<span class="badge">più economica</span>' : '')+'<small class="sub2">'+[countryName(r.country),day,stops,r.airline,age].filter(Boolean).join(' · ')+'</small></span><span class="price">'+Math.round(r.price)+' '+lastCur.toUpperCase()+'</span><a class="live" href="'+gf+'" target="_blank" rel="noopener">Verifica live ↗</a>';
     body.appendChild(div);
   });
   const mins = Math.round((Date.now()-lastAt)/60000);
@@ -327,7 +325,8 @@ $('searchBtn').addEventListener('click', async ()=>{
     else{
       status.textContent = "Cerco le partenze più economiche...";
       let data = [];
-      for(const mk of [market, ""]){
+      lastRows = await tryLatest(selectedDest.code, dep, currency, market);
+      for(const mk of (lastRows ? [] : [market, ""])){
         const p = new URLSearchParams({ destination:selectedDest.code, departure_at:dep, one_way:"true", sorting:"price", limit:"1000", currency });
         if(mk) p.set('market', mk);
         const j = await getJson(TP+"?"+p.toString());
@@ -341,7 +340,7 @@ $('searchBtn').addEventListener('click', async ()=>{
         const k = r.origin+r.departure_at.slice(0,10);
         if(!seen[k] || r.price < seen[k].price) seen[k] = r;
       });
-      lastRows = Object.values(seen).map(r=>({ o:r.origin, price:r.price, date:r.departure_at, transfers:r.transfers, airline:r.airline }));
+      if(!lastRows) lastRows = Object.values(seen).map(r=>({ o:r.origin, price:r.price, date:r.departure_at, transfers:r.transfers, airline:r.airline }));
       selectedDay = null;
       lastAt = Date.now();
       if(lastRows.length) cacheSet(key, lastRows);
